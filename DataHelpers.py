@@ -1,5 +1,8 @@
 import sqlite3 as sl
 import uuid
+import hashlib
+import time
+import math
 
 from config import *
 
@@ -36,6 +39,40 @@ class DatabaseConnection:
             for row in data:
                 return_data[row[1]] = row[0]
             return return_data
+
+    def EmailExists(self, mail):
+        con = sl.connect(f'{self.db_name}.db')
+        with con:
+            data = con.execute(f'''
+                SELECT * FROM Users WHERE user_mail='{mail}';
+            ''').fetchall()
+            con.commit()
+            return len(data) > 0
+
+    def InsertNewUser(self, mail, name, password, roles):
+        user_token = ConstructToken(mail, password)
+        user_uuid = uuid.uuid4()
+        user_name = name
+        user_roles = roles
+        user_mail = mail
+        user_reg_time = int(time.time())
+        con = sl.connect(f'{self.db_name}.db')
+        with con:
+            cur = con.cursor()
+            cur.executescript(f'''
+                INSERT INTO Users (user_uuid, user_name, user_mail, user_roles, user_reg_time) VALUES (
+                    '{user_uuid}',
+                    '{user_name}',
+                    '{user_mail}',
+                    '{user_roles}',
+                    {user_reg_time}
+                );
+                INSERT INTO Tokens (user_uuid, user_token) VALUES (
+                    '{user_uuid}',
+                    '{user_token}'
+                );
+            ''')
+            return user_token
 
     def GetUserInfo(self, user_uuid, what):
         try:
@@ -85,3 +122,10 @@ class DatabaseConnection:
             ''').fetchall()
             con.commit()
             return data
+
+
+def ConstructToken(mail, password_sha1):
+    string = f"::({mail}):({password_sha1}):::-"
+    string = hashlib.md5(string).hexdigest()
+    string = hashlib.sha256(string).hexdigest()
+    return string
