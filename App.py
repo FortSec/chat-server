@@ -1,17 +1,21 @@
 from flask import Flask, abort, url_for, request
 from flask_httpauth import HTTPTokenAuth
+from flask_socketio import *
 import sys
 import re
 
 from User import User, all_roles
-from DataHelpers import DatabaseConnection
+from DataHelpers import ConsoleLog, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, Print, LogRecievedReplyingAuth
 from Response import ConstructError, ConstructSuccess
+from config import *
 
 app = Flask(__name__)
+sockio = SocketIO(app, logger=True, engineio_logger=True)
 auth = HTTPTokenAuth(scheme='Bearer')
 db_con = DatabaseConnection()
 
 cached_users = {}
+connected_users = {}
 
 ########################
 # Authentication logic #
@@ -21,6 +25,7 @@ cached_users = {}
 @auth.verify_token
 def verify_token(token):
     tokens = db_con.GetAllTokens()
+    ConsoleLog(f"Verifying token {token}")
     if token in tokens:
         user_uuid = tokens[token]
         if user_uuid not in cached_users:
@@ -43,6 +48,7 @@ def get_user_roles(user_uuid):
 
 @auth.error_handler
 def unauthorized_auth():
+    ConsoleLog('User is unauthorized')
     abort(401)
 
 ###############
@@ -50,9 +56,18 @@ def unauthorized_auth():
 ###############
 
 
+@app.route('/path/<toWhat>', methods=['GET'])
+def path(toWhat):
+    LogRecievedReplying(f"/path/{toWhat}", request.remote_addr)
+    return ConstructSuccess({
+        'path': f"{server_host_url}{url_for(toWhat)}"
+    })
+
+
 @app.route('/docs', methods=['GET'])
 @auth.login_required(role='dev')
 def docs():
+    LogRecievedReplyingAuth(f"/docs", request.remote_addr)
     return {
         'response': 'docs',
         'data': {
@@ -100,10 +115,42 @@ def docs():
                     },
                     'response': ['success', 'error'],
                     'methods': ['POST']
+                },
+                {
+                    'url': url_for('status'),
+                    'name': 'Server status',
+                    'slug': 'status',
+                    'desc': 'Tells the client the status of the server.',
+                    'auth_required': False,
+                    'parameters': None,
+                    'response': ['success'],
+                    'methods': ['GET']
+                },
+                {
+                    'url': url_for('path'),
+                    'name': 'Path getter',
+                    'slug': 'path',
+                    'desc': 'Tells the client the path to the service.',
+                    'auth_required': False,
+                    'parameters': None,
+                    'response': ['success'],
+                    'methods': ['GET']
                 }
             ]
         }
     }
+
+
+@app.route('/status')
+def status():
+    LogRecievedReplying('/status', request.remote_addr)
+    return ConstructSuccess({
+        'status': 'open',
+        'accepts_clients': True,
+        'connected_clients': len(connected_users),
+        'accepts_guests': allow_guests,
+        'registration_allowed': user_registration_allowed
+    })
 
 #########
 # USERS #
@@ -112,6 +159,7 @@ def docs():
 
 @app.route('/user', methods=['POST'])
 def user():
+    LogRecievedChecking('/user', request.remote_addr)
     user_mail = request.args.get('user_mail')
     user_name = request.args.get('user_name')
     user_password = request.args.get('user_password')
@@ -121,19 +169,39 @@ def user():
     user_name_regex = re.compile(
         '''^[a-zA-Z][a-zA-Z0-9\s_\-&]{1,36}[a-zA-Z0-9]$''')
     if not user_mail or not user_name:
+        LogClientException('/user', request.remote_addr, 'missing data')
         return ConstructError('missing data')
     if not mail_regex.match(user_mail):
+        LogClientException('/user', request.remote_addr, 'email not valid')
         return ConstructError('email not valid')
     if not user_name_regex.match(user_name):
+        LogClientException('/user', request.remote_addr,
+                           'display name not valid')
         return ConstructError('display name not valid')
     if db_con.EmailExists(user_mail):
+        LogClientException('/user', request.remote_addr, 'email exists')
         return ConstructError('email exists')
     # Checks passed, register
+    LogClientChecksPassed('/user', request.remote_addr)
     registered_uuid = db_con.InsertNewUser(
         user_mail, user_name, user_password, user_roles)
     return ConstructSuccess({
         'uuid': registered_uuid
     })
+
+##############################
+# SOCKET CONNECTION HANDLERS #
+##############################
+
+
+@sockio.on('message')
+def socket_handle_message(data):
+    Print(f'recieved {data}')
+
+
+@sockio.on_error_default
+def socket_default_err_handler(e):
+    Print(f'error {e}')
 
 ############
 # FOR DEVS #
@@ -161,6 +229,8 @@ def dev_testPermissions():
 
 @app.errorhandler(405)
 def not_found(error):
+    LogClientException('N/A address', request.remote_addr,
+                       'method not allowed')
     return {
         'response': 'error',
         'data': {
@@ -171,6 +241,7 @@ def not_found(error):
 
 @app.errorhandler(404)
 def not_found(error):
+    LogClientException('N/A address', request.remote_addr, 'not found')
     return {
         'response': 'error',
         'data': {
@@ -181,6 +252,8 @@ def not_found(error):
 
 @app.errorhandler(403)
 def unauthorized(error):
+    LogClientException('N/A address', request.remote_addr,
+                       'unauthorized by server')
     return {
         'response': 'error',
         'data': {
@@ -191,6 +264,8 @@ def unauthorized(error):
 
 @app.errorhandler(401)
 def unauthorized(error):
+    LogClientException('N/A address', request.remote_addr,
+                       'unauthorized by token')
     return {
         'response': 'error',
         'data': {
@@ -201,6 +276,7 @@ def unauthorized(error):
 
 @app.errorhandler(Exception)
 def other_error(error):
+    LogClientException('N/A address', request.remote_addr, str(error))
     return {
         'response': 'error',
         'data': {
@@ -210,4 +286,5 @@ def other_error(error):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True)
+    ConsoleLog('Server started successfully')
+    sockio.run(app, host='0.0.0.0')

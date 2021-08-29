@@ -3,6 +3,8 @@ import uuid
 import hashlib
 import time
 import math
+import sys
+import datetime
 
 from config import *
 
@@ -129,3 +131,33 @@ def ConstructToken(mail, password_sha1):
     string = hashlib.md5(string).hexdigest()
     string = hashlib.sha256(string).hexdigest()
     return string
+
+
+def Print(str):
+    print(str, file=sys.stdout)
+
+
+def ConsoleLog(message):
+    Print(
+        f"[FortSec chat server - {datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
+
+
+def LogRecievedReplying(address, remote):
+    ConsoleLog(f"({address}) Recieved from {remote}, replying")
+
+
+def LogRecievedChecking(address, remote):
+    ConsoleLog(f"({address}) Recieved from {remote}, checking")
+
+
+def LogClientException(address, remote, message='Undefined'):
+    ConsoleLog(f"({address}) Exception to {remote}: {message}")
+
+
+def LogClientChecksPassed(address, remote):
+    ConsoleLog(
+        f"({address}) Checks passed for {remote}, replying with success")
+
+
+def LogRecievedReplyingAuth(address, remote):
+    ConsoleLog(f"({address}) Recieved and authorized from {remote}, replying")

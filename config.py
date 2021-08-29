@@ -1,3 +1,12 @@
+# Basic server config
+
+server_host_url = 'http://192.168.100.79:5000'
+allow_guests = False
+user_registration_allowed = False
+
+
+#### Roles and permissions
+
 all_roles = [
     'banned',
     'erroneous',
