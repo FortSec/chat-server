@@ -1,3 +1,4 @@
+from typing import Dict
 from flask import Flask, abort, url_for, request
 from flask_httpauth import HTTPTokenAuth
 from flask_socketio import *
@@ -5,12 +6,12 @@ import sys
 import re
 
 from User import User, all_roles
-from DataHelpers import ConsoleLog, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, Print, LogRecievedReplyingAuth
+from DataHelpers import ConsoleLog, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, LogSocketRecieved, LogSocketUnauth, Print, LogRecievedReplyingAuth
 from Response import ConstructError, ConstructSuccess
 from config import *
 
 app = Flask(__name__)
-sockio = SocketIO(app, logger=True, engineio_logger=True)
+sockio = SocketIO(app, logger=False, engineio_logger=False)
 auth = HTTPTokenAuth(scheme='Bearer')
 db_con = DatabaseConnection()
 
@@ -35,6 +36,7 @@ def verify_token(token):
             user_roles = list(map(int, user_roles.split(',')))
             cached_users[user_uuid] = User(
                 user_name, user_mail, user_uuid, user_roles)
+        ConsoleLog(f"User UUID {user_uuid} is authorized")
         return user_uuid
 
 
@@ -109,7 +111,6 @@ def docs():
                     'desc': 'Registeres new user.',
                     'auth_required': False,
                     'parameters': {
-                        'user_mail': 'User\'s mail that will be used as his ID [string]',
                         'user_name': 'User\'s display name. It don\'t have to be unique [string]',
                         'user_password': 'User\'s password in SHA1 [string]'
                     },
@@ -156,11 +157,20 @@ def status():
 # USERS #
 #########
 
+@app.route('/user', methods=['GET'])
+@auth.login_required(role='normal')
+def user_get():
+    LogRecievedReplyingAuth('/user', request.remote_addr)
+    user_uuid = auth.current_user()
+    return ConstructSuccess({
+        'uuid': user_uuid,
+        'name': db_con.GetUserInfo(user_uuid, 'name')
+    })
 
-@app.route('/user', methods=['POST'])
-def user():
-    LogRecievedChecking('/user', request.remote_addr)
-    user_mail = request.args.get('user_mail')
+@app.route('/user/<email>', methods=['POST'])
+def user(email):
+    LogRecievedChecking(f'/user/{email}', request.remote_addr)
+    user_mail = email
     user_name = request.args.get('user_name')
     user_password = request.args.get('user_password')
     user_roles = request.args.get('user_roles')
@@ -193,15 +203,94 @@ def user():
 # SOCKET CONNECTION HANDLERS #
 ##############################
 
+@sockio.on('join')
+def socket_handle_join(data):
+    LogSocketRecieved('JOIN', request.sid)
+    uuid = verify_token(data["Token"])
+    if not uuid:
+        LogSocketUnauth('JOIN', request.sid)
+        Emit('autherr')
+        return
+    if uuid in connected_users.values():
+        ConsoleLog(f"User with SID {request.sid} is trying to connect with an account that is already connected")
+        Emit('conerr')
+        return
+    ConsoleLog(f"Registered and joined user with UUID {uuid} (associated with SID {request.sid} from now)")
+    connected_users[request.sid] = uuid
+    data = {
+        'user_name': db_con.GetUserInfo(uuid, 'name')
+    }
+    Emit('joined', data, broadcast=True)
 
-@sockio.on('message')
-def socket_handle_message(data):
-    Print(f'recieved {data}')
+@sockio.on('mess')
+def socket_handle_mess(data):
+    LogSocketRecieved('MESS', request.sid)
+    uuid = verify_token(data["Token"])
+    message = str(data["Message"])
+    if not uuid:
+        LogSocketUnauth('MESS', request.sid)
+        Emit('autherr')
+        return
+    if not uuid in connected_users.values():
+        ConsoleLog(f"User with SID {request.sid} is trying to send message but is not connected")
+        Emit('conerr')
+        return
+    user_name = db_con.GetUserInfo(uuid, 'name')
+    ConsoleLog(f"User {user_name} is sending message: {message}")
+    data = {
+        'content': message,
+        'sender': user_name
+    }
+    Emit('newmess', data, broadcast=True)
+
+
+@sockio.on('connect')
+def socket_on_connect(auth):
+    ConsoleLog(f"User with SID {request.sid} has registered, waiting for JOIN request...")
+
+@sockio.on('disconnect')
+def socket_on_disconnect():
+    ConsoleLog(f"User with SID {request.sid} has dropped connection, handling")
+    try:
+        data = {
+            'user_name': db_con.GetUserInfo(connected_users[request.sid], 'name')
+        }
+        del connected_users[request.sid]
+        Emit('leaved', data, broadcast=True)
+    except:
+        ConsoleLog('Fatal hit on disconnect handler, avoiding crash')
+        return
 
 
 @sockio.on_error_default
 def socket_default_err_handler(e):
     Print(f'error {e}')
+
+###########
+# LOGGING #
+###########
+
+@sockio.on('message')
+def socket_log_message(data: str):
+    data = f" (data: {data})" if len(data) > 0 else ''
+    ConsoleLog(f"Recieved unknown socket {request.event['message'].upper()}{data} from {request.sid}")
+
+@sockio.on('json')
+def socket_log_json(data: Dict):
+    data = f" (data: {str(data)})" if data != {} else ''
+    ConsoleLog(f"Recieved unknown socket {request.event['message'].upper()}{data} from {request.sid}")
+
+def Emit(message: str, *args, **kwargs):
+    try:
+        data = f" (data: {str(args[0])})"
+    except IndexError:
+        data = ''
+    try:
+        broadcast = kwargs['broadcast']
+    except KeyError:
+        broadcast = False
+    ConsoleLog(f"Emitting {message.upper()}{data} {'back to sender' if not broadcast else 'to all'}")
+    emit(message, *args, **kwargs)
 
 ############
 # FOR DEVS #
@@ -209,7 +298,7 @@ def socket_default_err_handler(e):
 
 
 @app.route('/dev/insertTestSubject', methods=['GET'])
-@auth.login_required(role='dev')
+#@auth.login_required(role='dev')
 def dev_insertTestSubject():
     testing_subj_uuid = db_con.InsertTestSubject()
     return ConstructSuccess({
@@ -284,7 +373,10 @@ def other_error(error):
         }
     }
 
-
 if __name__ == '__main__':
     ConsoleLog('Server started successfully')
-    sockio.run(app, host='0.0.0.0')
+    try:
+        sockio.run(app, host='0.0.0.0', debug=server_debug_mode)
+    except KeyboardInterrupt:
+        ConsoleLog('Server shutting down due to keyboard interrupt')
+

@@ -4,6 +4,8 @@ server_host_url = 'http://192.168.100.79:5000'
 allow_guests = False
 user_registration_allowed = False
 
+server_debug_mode = False
+
 
 #### Roles and permissions
 
