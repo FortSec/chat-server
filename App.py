@@ -4,9 +4,10 @@ from flask_httpauth import HTTPTokenAuth
 from flask_socketio import *
 import sys
 import re
+import hashlib
 
 from User import User, all_roles
-from DataHelpers import ConsoleLog, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, LogSocketRecieved, LogSocketUnauth, Print, LogRecievedReplyingAuth
+from DataHelpers import ConsoleLog, ConstructToken, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, LogSocketRecieved, LogSocketUnauth, Print, LogRecievedReplyingAuth
 from Response import ConstructError, ConstructSuccess
 from config import *
 

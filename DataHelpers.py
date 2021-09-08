@@ -95,6 +95,7 @@ class DatabaseConnection:
         con = sl.connect(f'{self.db_name}.db')
         with con:
             new_uuid = uuid.uuid4()
+            new_uuid1 = uuid.uuid4()
             cur = con.cursor()
             cur.executescript(f'''
                 INSERT INTO Users (user_uuid, user_name, user_mail, user_roles, user_reg_time) VALUES (
@@ -118,6 +119,17 @@ class DatabaseConnection:
                 INSERT INTO Tokens (user_uuid, user_token) VALUES (
                     '{new_uuid}',
                     '2f5e23bad74e427b2c6e44153bbd5e91d487bddf78b105914a16a7e44e9e3dc3'
+                );
+                INSERT INTO Users (user_uuid, user_name, user_mail, user_roles, user_reg_time) VALUES (
+                    '{new_uuid1}',
+                    'Ernest Habán',
+                    'ernesthaban679@gmail.com',
+                    '2,5',
+                    1628165540
+                );
+                INSERT INTO Tokens (user_uuid, user_token) VALUES (
+                    '{new_uuid1}',
+                    'd3afeb0ba4f8fe4d6aee4c6516a500255fa0cc19216ede767abcd58703f5cc68'
                 );
             ''')
             con.commit()
