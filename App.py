@@ -61,8 +61,11 @@ def unauthorized_auth():
 @app.route('/path/<toWhat>', methods=['GET'])
 def path(toWhat):
     LogRecievedReplying(f"/path/{toWhat}", request.remote_addr)
+    parameters = {}
+    for item in request.args:
+        parameters[item] = request.args[item]
     return ConstructSuccess({
-        'path': f"{server_host_url}{url_for(toWhat)}"
+        'path': f"{server_host_url}{url_for(toWhat, **parameters)}"
     })
 
 
@@ -167,6 +170,19 @@ def user_get():
         'name': db_con.GetUserInfo(user_uuid, 'name')
     })
 
+@app.route('/about_user/<uuid>', methods=['GET'])
+@auth.login_required(role='normal')
+def user_get_about(uuid):
+    LogRecievedReplyingAuth('/user/about_user', request.remote_addr)
+    requesting_user_uuid = auth.current_user()
+    ConsoleLog(f"User {db_con.GetUserInfo(requesting_user_uuid, 'name')} is requesting an info about user {uuid}")
+    return ConstructSuccess({
+        'uuid': uuid,
+        'name': db_con.GetUserInfo(uuid, 'name'),
+        'roles': db_con.GetUserInfo(uuid, 'roles')
+    })
+
+
 @app.route('/user/<email>', methods=['POST'])
 def user(email):
     LogRecievedChecking(f'/user/{email}', request.remote_addr)
@@ -179,20 +195,20 @@ def user(email):
     user_name_regex = re.compile(
         '''^[a-zA-Z][a-zA-Z0-9\s_\-&]{1,36}[a-zA-Z0-9]$''')
     if not user_mail or not user_name:
-        LogClientException('/user', request.remote_addr, 'missing data')
+        LogClientException(f'/user/{email}', request.remote_addr, 'missing data')
         return ConstructError('missing data')
     if not mail_regex.match(user_mail):
-        LogClientException('/user', request.remote_addr, 'email not valid')
+        LogClientException(f'/user/{email}', request.remote_addr, 'email not valid')
         return ConstructError('email not valid')
     if not user_name_regex.match(user_name):
-        LogClientException('/user', request.remote_addr,
+        LogClientException(f'/user/{email}', request.remote_addr,
                            'display name not valid')
         return ConstructError('display name not valid')
     if db_con.EmailExists(user_mail):
-        LogClientException('/user', request.remote_addr, 'email exists')
+        LogClientException(f'/user/{email}', request.remote_addr, 'email exists')
         return ConstructError('email exists')
     # Checks passed, register
-    LogClientChecksPassed('/user', request.remote_addr)
+    LogClientChecksPassed(f'/user/{email}', request.remote_addr)
     registered_uuid = db_con.InsertNewUser(
         user_mail, user_name, user_password, user_roles)
     return ConstructSuccess({
@@ -218,7 +234,7 @@ def socket_handle_join(data):
     ConsoleLog(f"Registered and joined user with UUID {uuid} (associated with SID {request.sid} from now)")
     connected_users[request.sid] = uuid
     data = {
-        'user_name': db_con.GetUserInfo(uuid, 'name')
+        'user_name': uuid
     }
     Emit('joined', data, broadcast=True)
 
@@ -239,7 +255,7 @@ def socket_handle_mess(data):
     ConsoleLog(f"User {user_name} is sending message: {message}")
     data = {
         'content': message,
-        'sender': user_name
+        'sender': uuid
     }
     Emit('newmess', data, broadcast=True)
 
@@ -253,7 +269,7 @@ def socket_on_disconnect():
     ConsoleLog(f"User with SID {request.sid} has dropped connection, handling")
     try:
         data = {
-            'user_name': db_con.GetUserInfo(connected_users[request.sid], 'name')
+            'user_name': connected_users[request.sid]
         }
         del connected_users[request.sid]
         Emit('leaved', data, broadcast=True)
@@ -264,7 +280,7 @@ def socket_on_disconnect():
 
 @sockio.on_error_default
 def socket_default_err_handler(e):
-    Print(f'error {e}')
+    ConsoleLog(f'error {e}')
 
 ###########
 # LOGGING #
