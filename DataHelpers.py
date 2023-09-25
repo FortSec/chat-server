@@ -9,6 +9,9 @@ import datetime
 from config import *
 
 
+def GetKeyByValue(dict, value):
+    return list(dict.keys())[list(dict.values()).index(value)]
+
 class DatabaseConnection:
     def __init__(self, db_name='master'):
         self.db_name = db_name
@@ -107,7 +110,7 @@ class DatabaseConnection:
                 );
                 INSERT INTO Tokens (user_uuid, user_token) VALUES (
                     'b62cda51-468c-4f45-a3cc-edbbdfefc35e',
-                    'cad26a9abf31ded918f0249eb1221f01f18e875aab68fe9d1232e32834e0eae5'
+                    'e67e2ad3cb15817b25b203f8bc56792a9a05f2889094b06b24e71ca5ce1a6fbe'
                 );
                 INSERT INTO Users (user_uuid, user_name, user_mail, user_roles, user_reg_time) VALUES (
                     '{new_uuid}',
@@ -118,7 +121,7 @@ class DatabaseConnection:
                 );
                 INSERT INTO Tokens (user_uuid, user_token) VALUES (
                     '{new_uuid}',
-                    '2f5e23bad74e427b2c6e44153bbd5e91d487bddf78b105914a16a7e44e9e3dc3'
+                    '985cd129f602e24037e8b7df9977e60e57bc91293c0755b815c59406fde4e6e8'
                 );
                 INSERT INTO Users (user_uuid, user_name, user_mail, user_roles, user_reg_time) VALUES (
                     '{new_uuid1}',

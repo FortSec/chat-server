@@ -5,16 +5,32 @@ from flask_socketio import *
 import sys
 import re
 import hashlib
+import uuid
 
 from User import User, all_roles
-from DataHelpers import ConsoleLog, ConstructToken, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, LogSocketRecieved, LogSocketUnauth, Print, LogRecievedReplyingAuth
+from DataHelpers import ConsoleLog, ConstructToken, DatabaseConnection, LogClientChecksPassed, LogClientException, LogRecievedChecking, LogRecievedReplying, LogSocketRecieved, LogSocketUnauth, Print, LogRecievedReplyingAuth, GetKeyByValue
 from Response import ConstructError, ConstructSuccess
 from config import *
 
 app = Flask(__name__)
-sockio = SocketIO(app, logger=False, engineio_logger=False)
+sockio = SocketIO(app, logger=False, engineio_logger=False, ssl_check_certificates=False)
 auth = HTTPTokenAuth(scheme='Bearer')
 db_con = DatabaseConnection()
+all_rooms = {}
+
+# Load rooms
+all_rooms["general"] = {
+    "name": "Hlavné"
+}
+rooms_memebrs = {
+    "general": []
+}
+for room in rooms:
+    new_room_uuid = uuid.uuid4()
+    all_rooms[str(new_room_uuid)] = {
+        "name": room
+    }
+    rooms_memebrs[str(new_room_uuid)] = []
 
 cached_users = {}
 connected_users = {}
@@ -216,6 +232,26 @@ def user(email):
         'uuid': registered_uuid
     })
 
+
+#########
+# OTHER #
+#########
+
+@app.route('/fetch_rooms', methods=['GET'])
+@auth.login_required(role='normal')
+def fetch_rooms():
+    LogRecievedReplyingAuth('/fetch_rooms', request.remote_addr)
+    res = []
+    for room_uuid in all_rooms.keys():
+        res.append({
+            "uuid": room_uuid,
+            "name": all_rooms[room_uuid]["name"]
+        })
+    return ConstructSuccess({
+        'rooms': res
+    })
+
+
 ##############################
 # SOCKET CONNECTION HANDLERS #
 ##############################
@@ -235,15 +271,67 @@ def socket_handle_join(data):
     ConsoleLog(f"Registered and joined user with UUID {uuid} (associated with SID {request.sid} from now)")
     connected_users[request.sid] = uuid
     data = {
-        'user_name': uuid
+        'user_name': uuid,
+        'public_key': data['PublicKey']
     }
+    join_room("general") # automatically connect to general on join
+    rooms_memebrs["general"].append(request.sid)
     Emit('joined', data, broadcast=True)
+    
+@sockio.on('room_roam')
+def socket_handle_room_roam(data):
+    LogSocketRecieved('ROOM_ROAM', request.sid)
+    uuid = verify_token(data["Token"])
+    if not uuid:
+        LogSocketUnauth('ROOM_ROAM', request.sid)
+        Emit('autherr')
+        return
+    if not uuid in connected_users.values():
+        ConsoleLog(f"User with SID {request.sid} is trying to roam the rooms but is not connected")
+        Emit('conerr')
+        return
+    oldRoomUuid = data["OldRoom"]
+    newRoomUuid = data["NewRoom"]
+    ConsoleLog(f"User UUID {uuid} is roaming from {all_rooms[oldRoomUuid]['name'].encode('utf-8')} to {all_rooms[newRoomUuid]['name'].encode('utf-8')}")
+    if request.sid in rooms_memebrs[oldRoomUuid]: rooms_memebrs[oldRoomUuid].remove(request.sid)
+    if request.sid not in rooms_memebrs[newRoomUuid]: rooms_memebrs[newRoomUuid].append(request.sid)
+    leave_room(oldRoomUuid)
+    join_room(newRoomUuid)
+    data = {
+        'user': uuid
+    }
+    for u_sid in rooms_memebrs[oldRoomUuid]: Emit('roamed_out', data, to=u_sid)
+    for u_sid in rooms_memebrs[newRoomUuid]: Emit('roamed_in', data, to=u_sid)
+    
+@sockio.on('certpoll')
+def socket_handle_cert_poll(data):
+    LogSocketRecieved('CERTPOLL', request.sid)
+    uuid = verify_token(data["Token"])
+    if not uuid:
+        LogSocketUnauth('CERTPOLL', request.sid)
+        Emit('autherr')
+        return
+    if not uuid in connected_users.values():
+        ConsoleLog(f"User with SID {request.sid} is trying to send it's certificate but is not connected")
+        Emit('conerr')
+        return
+    toUser = data["ToUser"]
+    pubKey = data["PublicKey"]
+    # ConsoleLog(f"User UUID {uuid} is roaming from {all_rooms[oldRoomUuid]['name'].encode('utf-8')} to {all_rooms[newRoomUuid]['name'].encode('utf-8')}")
+    data = {
+        'user': uuid,
+        'pubKey': pubKey
+    }
+    Emit('writecert', data, to=GetKeyByValue(connected_users, toUser))
+
 
 @sockio.on('mess')
 def socket_handle_mess(data):
     LogSocketRecieved('MESS', request.sid)
     uuid = verify_token(data["Token"])
     message = str(data["Message"])
+    fromRoom = str(data["FromRoom"])
+    toUser = str(data["ToUser"])
     if not uuid:
         LogSocketUnauth('MESS', request.sid)
         Emit('autherr')
@@ -253,12 +341,12 @@ def socket_handle_mess(data):
         Emit('conerr')
         return
     user_name = db_con.GetUserInfo(uuid, 'name')
-    ConsoleLog(f"User {user_name} is sending message: {message}")
     data = {
         'content': message,
         'sender': uuid
     }
-    Emit('newmess', data, broadcast=True)
+    touserSid = GetKeyByValue(connected_users, toUser)
+    if touserSid in rooms_memebrs[fromRoom]: Emit('newmess', data, to=touserSid)
 
 
 @sockio.on('connect')
@@ -268,6 +356,8 @@ def socket_on_connect(auth):
 @sockio.on('disconnect')
 def socket_on_disconnect():
     ConsoleLog(f"User with SID {request.sid} has dropped connection, handling")
+    for k in rooms_memebrs.keys():
+        if request.sid in rooms_memebrs[k]: rooms_memebrs[k].remove(request.sid)
     try:
         data = {
             'user_name': connected_users[request.sid]
@@ -299,7 +389,7 @@ def socket_log_json(data: Dict):
 
 def Emit(message: str, *args, **kwargs):
     try:
-        data = f" (data: {str(args[0])})"
+        data = f" (data: {str(args[0]).encode('utf-8')})"
     except IndexError:
         data = ''
     try:
@@ -393,7 +483,10 @@ def other_error(error):
 if __name__ == '__main__':
     ConsoleLog('Server started successfully')
     try:
-        sockio.run(app, host='0.0.0.0', debug=server_debug_mode)
+        
+        sockio.run(app, host='0.0.0.0', debug=server_debug_mode, certfile='certs/cert.pem', keyfile='certs/key.pem')
+        # sockio.run(app, host='0.0.0.0', debug=server_debug_mode)
+        
     except KeyboardInterrupt:
         ConsoleLog('Server shutting down due to keyboard interrupt')
 

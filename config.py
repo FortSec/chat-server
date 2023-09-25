@@ -1,11 +1,18 @@
 # Basic server config
 
-server_host_url = 'http://192.168.100.79:5000'
+server_host_url = 'https://jachtarska61.ddns.net:5000/'
 allow_guests = False
 user_registration_allowed = False
 
 server_debug_mode = False
 
+
+### Rooms (general is always created)
+
+rooms = [
+    'Tajné veci',
+    'Tuto sa nepozerať'
+]
 
 #### Roles and permissions
 
